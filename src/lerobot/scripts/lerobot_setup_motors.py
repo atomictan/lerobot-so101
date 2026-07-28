@@ -22,6 +22,16 @@ lerobot-setup-motors \
     --teleop.type=so100_leader \
     --teleop.port=/dev/tty.usbmodem575E0031751
 ```
+
+To (re)configure a single motor instead of all of them, pass `--single_motor=true`. You will be
+prompted to pick which motor to set up and which ID to assign it:
+
+```shell
+lerobot-setup-motors \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --single_motor=true
+```
 """
 
 from dataclasses import dataclass
@@ -70,12 +80,41 @@ COMPATIBLE_DEVICES = [
 class SetupConfig:
     teleop: TeleoperatorConfig | None = None
     robot: RobotConfig | None = None
+    single_motor: bool = False
 
     def __post_init__(self):
         if bool(self.teleop) == bool(self.robot):
             raise ValueError("Choose either a teleop or a robot.")
 
         self.device = self.robot if self.robot else self.teleop
+
+
+def _select_motor(motor_names: list[str]) -> str:
+    print("Available motors:")
+    for i, name in enumerate(motor_names, start=1):
+        print(f"  {i}. {name}")
+
+    while True:
+        choice = input(f"Select a motor to set up [1-{len(motor_names)}]: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(motor_names):
+            return motor_names[int(choice) - 1]
+        print("Invalid selection, please try again.")
+
+
+def _prompt_motor_id() -> int:
+    while True:
+        choice = input("Enter the desired motor ID: ").strip()
+        if choice.isdigit():
+            return int(choice)
+        print("Invalid ID, please enter a positive integer.")
+
+
+def setup_single_motor(device) -> None:
+    motor = _select_motor(list(device.bus.motors))
+    device.bus.motors[motor].id = _prompt_motor_id()
+    input(f"Connect the controller board to the '{motor}' motor only and press enter.")
+    device.bus.setup_motor(motor)
+    print(f"'{motor}' motor id set to {device.bus.motors[motor].id}")
 
 
 @draccus.wrap()
@@ -88,7 +127,10 @@ def setup_motors(cfg: SetupConfig):
     else:
         device = make_teleoperator_from_config(cfg.device)
 
-    device.setup_motors()
+    if cfg.single_motor:
+        setup_single_motor(device)
+    else:
+        device.setup_motors()
 
 
 def main():

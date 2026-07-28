@@ -1,0 +1,93 @@
+##### Set up motor ID
+# single_motor=false: set ID for all motors; default is true, set ID for single motor
+lerobot-setup-motors \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --single_motor=true
+
+##### Robot Arm Calibration
+
+lerobot-calibrate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/lerobot_follower \
+    --robot.id=my_awesome_follower_arm
+
+lerobot-calibrate \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/lerobot_leader \
+    --teleop.id=my_awesome_leader_arm
+
+##### Play mp4 video
+ffplay "/home/atomic/.cache/huggingface/lerobot/Atomictan/record-test_20260708_152018/videos/observation.images.side/chunk-000/file-000.mp4"
+
+##### Teleoperation
+# without cameras: remove robot.cameras argument
+lerobot-teleoperate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/lerobot_follower \
+    --robot.id=my_awesome_follower_arm \
+    --robot.cameras="{ wrist: {type: opencv, index_or_path: /dev/lerobot_wrist_cam, width: 480, height: 640, fps: 30, rotation: 90}, side: {type: opencv, index_or_path: /dev/lerobot_side_cam, width: 640, height: 480, fps: 30} }" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/lerobot_leader \
+    --teleop.id=my_awesome_leader_arm \
+    --display_data=true
+
+
+##### Command to record dataset
+# not upload huggingface: dataset.push_to_hub=false
+lerobot-record \
+    --robot.type=so101_follower \
+    --robot.port=/dev/lerobot_follower \
+    --robot.id=my_awesome_follower_arm \
+    --robot.cameras="{ wrist: {type: opencv, index_or_path: /dev/lerobot_wrist_cam, width: 480, height: 640, fps: 30, rotation: 90}, side: {type: opencv, index_or_path: /dev/lerobot_side_cam, width: 640, height: 480, fps: 30} }" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/lerobot_leader \
+    --teleop.id=my_awesome_leader_arm \
+    --display_data=true \
+    --dataset.repo_id=Atomictan/record-test \
+    --dataset.num_episodes=5 \
+    --dataset.single_task="Grab the tube" \
+    --dataset.streaming_encoding=true \
+    --dataset.encoder_threads=2 \
+    --dataset.push_to_hub=false
+
+lerobot-replay \
+    --robot.type=so101_follower \
+    --robot.port=/dev/lerobot_follower \
+    --robot.id=my_awesome_follower_arm \
+    --dataset.repo_id=Atomictan/record-test \
+    --dataset.episode=0 # choose the episode you want to replay
+
+##### Command to train the model using collected dataset
+lerobot-train \
+  --dataset.repo_id=Atomictan/record-test_20260708_181459 \
+  --policy.type=act \
+  --output_dir=outputs/train/act_so101_test \
+  --job_name=act_so101_test \
+  --policy.device=cuda \
+  --wandb.enable=true \
+  --wandb.mode=offline \
+  --policy.repo_id=Atomictan/my_policy \
+  --policy.push_to_hub=false \
+  --steps=30000 \
+  --save_freq=5000
+
+##### Command to rollout a policy
+lerobot-rollout   --strategy.type=base   --policy.path=outputs/train/act_grab_tube_v4/checkpoints/last/pretrained_model   --robot.type=so101_follower   --robot.port=/dev/lerobot_follower   --robot.id=my_awesome_follower_arm   --robot.cameras="{ wrist: {type: opencv, index_or_path: /dev/lerobot_wrist_cam, width: 480, height: 640, fps: 30, rotation: 90}, side: {type: opencv, index_or_path: /dev/lerobot_side_cam, width: 640, height: 480, fps: 30} }"   --task="Grab the tube"   --duration=0   --display_data=true
+
+
+##### Script made to run 20 episodes, calculate the successful rate and provide the option to do correction recording
+# without correction recording
+/home/atomic/miniconda3/envs/lerobot312/bin/python scripts/learning/evaluate_policy.py     --policy-path outputs/train/act_so101_test_round2/checkpoints/last/pretrained_model     --num-episodes 20     --run-name round2_collect
+# with correction recording
+/home/atomic/miniconda3/envs/lerobot312/bin/python scripts/learning/evaluate_policy.py     --policy-path outputs/train/act_so101_test_round2/checkpoints/last/pretrained_model     --num-episodes 20     --run-name round2_collect     --collect-on-failure    --manual-align
+
+
+
+# Command to merge two datasets
+
+lerobot-edit-dataset \
+    --new_repo_id Atomictan/grab_tube_merged_v1 \
+    --operation.type merge \
+    --operation.repo_ids "['Atomictan/record-test_20260709_123546', 'Atomictan/grab_tube_corrections_20260721_141125']"
+
