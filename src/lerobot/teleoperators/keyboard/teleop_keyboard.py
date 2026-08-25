@@ -183,30 +183,48 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
         delta_z = 0.0
         gripper_action = 1.0
 
-        # Generate action based on current key states
-        for key, val in self.current_pressed.items():
-            if key == keyboard.Key.up:
-                delta_y = -int(val)
-            elif key == keyboard.Key.down:
-                delta_y = int(val)
-            elif key == keyboard.Key.left:
-                delta_x = int(val)
-            elif key == keyboard.Key.right:
-                delta_x = -int(val)
-            elif key == keyboard.Key.shift:
-                delta_z = -int(val)
-            elif key == keyboard.Key.shift_r:
-                delta_z = int(val)
-            elif key == keyboard.Key.ctrl_r:
-                # Gripper actions are expected to be between 0 (close), 1 (stay), 2 (open)
-                gripper_action = int(val) + 1
-            elif key == keyboard.Key.ctrl_l:
-                gripper_action = int(val) - 1
-            elif val:
-                # If the key is pressed, add it to the misc_keys_queue
-                # this will record key presses that are not part of the delta_x, delta_y, delta_z
-                # this is useful for retrieving other events like interventions for RL, episode success, etc.
-                self.misc_keys_queue.put(key)
+        # Derive the action from the keys currently HELD.
+        #
+        # The previous version looped over every entry in `current_pressed` -- including keys
+        # that had been released -- and assigned unconditionally (`delta_y = -int(val)`). A
+        # stale `down: False` entry therefore zeroed a held `up`, with the winner decided by
+        # dict insertion order. The result was control that worked or not depending on which
+        # keys had been touched earlier in the session. Releasing ctrl_l was worse still:
+        # `int(False) - 1` produced gripper_action = -1, outside the valid [0, 2] range.
+        held = {key for key, val in self.current_pressed.items() if val}
+
+        # +=/-= rather than assignment, so holding opposing keys cancels instead of
+        # depending on iteration order.
+        if keyboard.Key.up in held:
+            delta_y -= 1.0
+        if keyboard.Key.down in held:
+            delta_y += 1.0
+        if keyboard.Key.left in held:
+            delta_x += 1.0
+        if keyboard.Key.right in held:
+            delta_x -= 1.0
+        if keyboard.Key.shift in held:
+            delta_z -= 1.0
+        if keyboard.Key.shift_r in held:
+            delta_z += 1.0
+
+        # Discrete gripper: 0 / 1 / 2. Holding both cancels back to "stay".
+        close_held = keyboard.Key.ctrl_r in held
+        open_held = keyboard.Key.ctrl_l in held
+        if close_held and not open_held:
+            gripper_action = 2.0
+        elif open_held and not close_held:
+            gripper_action = 0.0
+
+        # Non-movement keys (s / q / r) are one-shot events. Queue each press once and mark it
+        # consumed, or a single tap would re-fire on every poll now that state persists.
+        movement_keys = {
+            keyboard.Key.up, keyboard.Key.down, keyboard.Key.left, keyboard.Key.right,
+            keyboard.Key.shift, keyboard.Key.shift_r, keyboard.Key.ctrl_r, keyboard.Key.ctrl_l,
+        }
+        for key in held - movement_keys:
+            self.misc_keys_queue.put(key)
+            self.current_pressed[key] = False
 
         action_dict = {
             "delta_x": delta_x,
@@ -258,7 +276,11 @@ class KeyboardEndEffectorTeleop(KeyboardTeleop):
         ]
         is_intervention = any(self.current_pressed.get(key, False) for key in movement_keys)
 
-        self.current_pressed.clear()
+        # NOTE: `current_pressed` is a key-STATE map -- `_on_press` sets True and `_on_release`
+        # sets False, so it already reflects what is held. Clearing it here (as this used to do)
+        # made a held key deliver exactly ONE step of control: the state was wiped after the
+        # first poll and nothing restored it until the OS key-repeat fired ~500 ms later. The
+        # operator ended up with stuttering authority over the arm and could not steer it.
 
         # Check for episode control commands from misc_keys_queue
         terminate_episode = False

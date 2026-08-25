@@ -44,6 +44,7 @@ For more details on the complete HILSerl training workflow, see:
 https://github.com/michel-aractingi/lerobot-hilserl-guide
 """
 
+import traceback
 import logging
 import os
 import shutil
@@ -83,7 +84,11 @@ from lerobot.configs import parser
 from lerobot.datasets import LeRobotDataset, make_dataset
 from lerobot.policies import make_policy, make_pre_post_processors
 from lerobot.robots import so_follower  # noqa: F401
-from lerobot.teleoperators import gamepad, so_leader  # noqa: F401
+# `keyboard` is needed so KeyboardEndEffectorTeleop registers its `keyboard_ee` choice.
+# Without it the learner cannot even PARSE a config that names keyboard_ee as the
+# intervention device -- and keyboard_ee is one of only two teleoperators that
+# implement get_teleop_events(), so it is a normal choice, not an exotic one.
+from lerobot.teleoperators import gamepad, keyboard, so_leader  # noqa: F401
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.transport.utils import (
     MAX_MESSAGE_SIZE,
@@ -248,6 +253,7 @@ def start_learner_threads(
         logging.info("[LEARNER] Training process stopped")
     except Exception:
         logging.exception("[LEARNER] Unhandled exception in training loop")
+        traceback.print_exc()  # see the note in actor.py: logging drops exc_info here
         shutdown_event.set()
     finally:
         logging.info("[LEARNER] Closing queues")

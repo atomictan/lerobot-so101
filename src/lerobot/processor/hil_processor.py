@@ -16,7 +16,7 @@
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from lerobot.teleoperators.teleoperator import Teleoperator
 
 from lerobot.types import EnvTransition, PolicyAction, TransitionKey
+from lerobot.utils.constants import IMAGENET_STATS
 
 from .pipeline import (
     ComplementaryDataProcessorStep,
@@ -464,6 +465,13 @@ class InterventionActionProcessorStep(ProcessorStep):
 
     use_gripper: bool = False
     terminate_on_success: bool = True
+    latch_intervention: bool = True
+
+    _latched: bool = field(default=False, init=False, repr=False)
+
+    def reset(self) -> None:
+        """Drop the latch at the episode boundary so the policy drives the next episode."""
+        self._latched = False
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
@@ -485,6 +493,15 @@ class InterventionActionProcessorStep(ProcessorStep):
         complementary_data = transition.get(TransitionKey.COMPLEMENTARY_DATA, {})
         teleop_action = complementary_data.get(TELEOP_ACTION_KEY, {})
         is_intervention = info.get(TeleopEvents.IS_INTERVENTION, False)
+
+        # With `latch_intervention`, the first keypress hands the operator the rest of the
+        # episode instead of only the steps where a key happens to be down. Sharing an episode
+        # with the policy at 10 Hz is very hard to steer: releasing for even one cycle lets a
+        # random action move the arm, so a grasp is difficult to complete. The latch clears in
+        # reset(), so the policy drives the next episode from scratch.
+        if self.latch_intervention and is_intervention:
+            self._latched = True
+        is_intervention = is_intervention or self._latched
         terminate_episode = info.get(TeleopEvents.TERMINATE_EPISODE, False)
         success = info.get(TeleopEvents.SUCCESS, False)
         rerecord_episode = info.get(TeleopEvents.RERECORD_EPISODE, False)
@@ -563,7 +580,22 @@ class RewardClassifierProcessorStep(ProcessorStep):
         success_threshold: The probability threshold to consider a prediction as successful.
         success_reward: The reward value to assign on success.
         terminate_on_success: If True, terminates the episode upon successful classification.
+        normalize_images: If True, apply the same image normalization the classifier was
+            trained with before running inference. See the note below.
         reward_classifier: The loaded classifier model instance.
+
+    Note on normalization:
+        Training normalizes images. `make_classifier_processor` builds a
+        `NormalizerProcessorStep` with `VISUAL: MEAN_STD`, and `make_dataset` overwrites the
+        camera stats with `IMAGENET_STATS` whenever `use_imagenet_stats` is set (the default),
+        so the classifier learns on ImageNet-normalized input.
+
+        Inference did not. That processor is only ever constructed by `lerobot-train`;
+        `Classifier.from_pretrained` loads no processor, and this step used to call
+        `predict_reward` on the raw [0, 1] frames coming out of the env pipeline. The
+        classifier's vision encoder is frozen, so it cannot adapt to the shifted input
+        distribution -- and nothing raises, the reward is simply wrong, which in RL means the
+        agent optimizes a corrupted signal. Normalizing here closes that gap.
     """
 
     pretrained_path: str | None = None
@@ -571,17 +603,43 @@ class RewardClassifierProcessorStep(ProcessorStep):
     success_threshold: float = 0.5
     success_reward: float = 1.0
     terminate_on_success: bool = True
+    normalize_images: bool = True
 
     reward_classifier: Any = None
 
     def __post_init__(self):
         """Initializes the reward classifier model after the dataclass is created."""
+        self._image_mean: torch.Tensor | None = None
+        self._image_std: torch.Tensor | None = None
+        if self.normalize_images:
+            self._image_mean = torch.tensor(IMAGENET_STATS["mean"], dtype=torch.float32)
+            self._image_std = torch.tensor(IMAGENET_STATS["std"], dtype=torch.float32)
+
         if self.pretrained_path is not None:
             from lerobot.rewards.classifier.modeling_classifier import Classifier
 
             self.reward_classifier = Classifier.from_pretrained(self.pretrained_path)
             self.reward_classifier.to(self.device)
             self.reward_classifier.eval()
+
+    def _prepare(self, images: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Put images on the classifier's device and apply the training-time normalization.
+
+        The device move is required because `DeviceProcessorStep` runs *after* this step in the
+        env pipeline, so observations arrive on CPU while the classifier was moved to
+        `self.device` in `__post_init__`. Without it, a cuda classifier raises
+        "Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor)".
+        """
+        prepared = {}
+        for key, image in images.items():
+            image = image.to(device=self.device)
+            if self._image_mean is not None:
+                if self._image_mean.device != image.device or self._image_mean.dtype != image.dtype:
+                    self._image_mean = self._image_mean.to(device=image.device, dtype=image.dtype)
+                    self._image_std = self._image_std.to(device=image.device, dtype=image.dtype)
+                image = (image - self._image_mean) / self._image_std
+            prepared[key] = image
+        return prepared
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         """
@@ -605,10 +663,12 @@ class RewardClassifierProcessorStep(ProcessorStep):
         if not images:
             return new_transition
 
-        # Run reward classifier
+        # Run reward classifier on the same input distribution it was trained on.
         start_time = time.perf_counter()
         with torch.inference_mode():
-            success = self.reward_classifier.predict_reward(images, threshold=self.success_threshold)
+            success = self.reward_classifier.predict_reward(
+                self._prepare(images), threshold=self.success_threshold
+            )
 
         classifier_frequency = 1 / (time.perf_counter() - start_time)
 
@@ -644,6 +704,7 @@ class RewardClassifierProcessorStep(ProcessorStep):
             "success_threshold": self.success_threshold,
             "success_reward": self.success_reward,
             "terminate_on_success": self.terminate_on_success,
+            "normalize_images": self.normalize_images,
         }
 
     def transform_features(

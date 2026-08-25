@@ -17,6 +17,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+import logging
 import numpy as np
 
 from lerobot.configs import FeatureType, PipelineFeatureType, PolicyFeature
@@ -221,13 +222,19 @@ class EEBoundsAndSafety(RobotActionProcessorStep):
         # Clip position
         pos = np.clip(pos, self.end_effector_bounds["min"], self.end_effector_bounds["max"])
 
-        # Check for jumps in position
+        # Limit per-step jumps. The clamp below was already written but unreachable -- the
+        # raise fired first, killing the process. Aborting is the wrong response during RL:
+        # a single oversized command (e.g. the arm drifting while the first CUDA inference
+        # warms up, which produced a 0.067 m jump against this 0.05 m limit) would end a
+        # training run. Clamping preserves the safety intent without losing the session.
         if self._last_pos is not None:
             dpos = pos - self._last_pos
             n = float(np.linalg.norm(dpos))
             if n > self.max_ee_step_m and n > 0:
+                logging.warning(
+                    f"EE jump {n:.3f}m > {self.max_ee_step_m}m; clamping to the limit"
+                )
                 pos = self._last_pos + dpos * (self.max_ee_step_m / n)
-                raise ValueError(f"EE jump {n:.3f}m > {self.max_ee_step_m}m")
 
         self._last_pos = pos
 

@@ -105,19 +105,31 @@ class GymManipulatorConfig:
     device: str = "cpu"
 
 
+# Reset motion speed. The original implementation used a fixed 50 interpolation steps at
+# 0.015 s, which makes every reset take 0.75 s *regardless of distance* -- so a long move
+# is violently fast and a short one is needlessly slow. Deriving the step count from the
+# largest joint displacement instead gives a constant angular speed:
+#     speed = RESET_MAX_DEG_PER_STEP / RESET_STEP_INTERVAL_S  degrees/second
+# Lower RESET_MAX_DEG_PER_STEP (or raise the interval) to slow the arm further.
+RESET_MAX_DEG_PER_STEP = 0.6
+RESET_STEP_INTERVAL_S = 0.02
+
+
 def reset_follower_position(robot_arm: Robot, target_position: np.ndarray) -> None:
-    """Reset robot arm to target position using smooth trajectory."""
+    """Move the arm to `target_position` at a constant, distance-independent joint speed."""
     current_position_dict = robot_arm.bus.sync_read("Present_Position")
     current_position = np.array(
         [current_position_dict[name] for name in current_position_dict], dtype=np.float32
     )
-    trajectory = torch.from_numpy(
-        np.linspace(current_position, target_position, 50)
-    )  # NOTE: 30 is just an arbitrary number
+
+    largest_move_deg = float(np.abs(np.asarray(target_position, dtype=np.float32) - current_position).max())
+    num_steps = max(2, int(np.ceil(largest_move_deg / RESET_MAX_DEG_PER_STEP)))
+
+    trajectory = torch.from_numpy(np.linspace(current_position, target_position, num_steps))
     for pose in trajectory:
         action_dict = dict(zip(current_position_dict, pose, strict=False))
         robot_arm.bus.sync_write("Goal_Position", action_dict)
-        precise_sleep(0.015)
+        precise_sleep(RESET_STEP_INTERVAL_S)
 
 
 class RobotEnv(gym.Env):

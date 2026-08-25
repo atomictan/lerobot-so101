@@ -500,6 +500,17 @@ class ReplayBuffer:
                 complementary_info=data.get("complementary_info", None),
             )
 
+        # Match the image scale the rest of the RL pipeline runs on, which is [0, 255].
+        # `make_dataset()` yields uint8 in [0, 255], but a bare `LeRobotDataset` -- the resume
+        # path -- yields float32 already divided by 255. Left alone, a resumed run feeds the
+        # encoder images 255x darker than the ones it learned from, with nothing raised to say
+        # so. Judge the scale per key across the whole buffer, since any single frame may
+        # legitimately be dark.
+        for key, tensor in replay_buffer.states.items():
+            if tensor.ndim == 4 and tensor.shape[1] in (1, 3) and tensor.is_floating_point():
+                if replay_buffer.size > 0 and tensor[: replay_buffer.size].max() <= 1.0:
+                    tensor.mul_(255.0)
+
         return replay_buffer
 
     def to_lerobot_dataset(
@@ -561,6 +572,17 @@ class ReplayBuffer:
         # Start writing images if needed
         lerobot_dataset.writer.start_image_writer(num_processes=0, num_threads=3)
 
+        # Images are held in the buffer as float32. The RL pipeline's convention is [0, 255],
+        # but the dataset image writer accepts float only in [0, 1] -- so writing them
+        # unconverted fails on every frame and the saved buffer ends up with no images at all,
+        # which only surfaces later as an unusable resume. Hand the writer uint8 instead.
+        # Decide the scale once per key from the whole buffer: a per-frame max would
+        # misclassify a uniformly dark frame as already-normalized.
+        image_keys = {key for key in self.states if features[key]["dtype"] == "image"}
+        scale_to_255 = {
+            key: bool(self.states[key][: self.size].max() <= 1.0) for key in image_keys
+        }
+
         # Convert transitions into episodes and frames
 
         for idx in range(self.size):
@@ -570,7 +592,12 @@ class ReplayBuffer:
 
             # Fill the data for state keys
             for key in self.states:
-                frame_dict[key] = self.states[key][actual_idx].cpu()
+                val = self.states[key][actual_idx].cpu()
+                if key in image_keys and val.is_floating_point():
+                    if scale_to_255[key]:
+                        val = val * 255.0
+                    val = val.round().clamp(0, 255).to(torch.uint8)
+                frame_dict[key] = val
 
             # Fill action, reward, done
             frame_dict[ACTION] = self.actions[actual_idx].cpu()

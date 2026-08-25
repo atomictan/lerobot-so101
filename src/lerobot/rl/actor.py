@@ -46,6 +46,7 @@ For more details on the complete HILSerl training workflow, see:
 https://github.com/michel-aractingi/lerobot-hilserl-guide
 """
 
+import traceback
 import logging
 import os
 import time
@@ -88,7 +89,11 @@ from lerobot.configs import parser
 from lerobot.policies import make_policy, make_pre_post_processors
 from lerobot.processor import TransitionKey
 from lerobot.robots import so_follower  # noqa: F401
-from lerobot.teleoperators import gamepad, so_leader  # noqa: F401
+# `keyboard` is needed so KeyboardEndEffectorTeleop registers its `keyboard_ee` choice.
+# Without it the learner cannot even PARSE a config that names keyboard_ee as the
+# intervention device -- and keyboard_ee is one of only two teleoperators that
+# implement get_teleop_events(), so it is a normal choice, not an exotic one.
+from lerobot.teleoperators import gamepad, keyboard, so_leader  # noqa: F401
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.process import ProcessSignalHandler
@@ -205,6 +210,9 @@ def actor_cli(cfg: TrainRLServerPipelineConfig):
         logging.info("[ACTOR] Policy loop finished")
     except Exception:
         logging.exception("[ACTOR] Unhandled exception in act_with_policy")
+        # The configured logging handlers drop exc_info, so the traceback never reaches
+        # the log or the terminal -- print it explicitly or failures are undiagnosable.
+        traceback.print_exc()
         shutdown_event.set()
     finally:
         logging.info("[ACTOR] Closing queues")
@@ -402,6 +410,16 @@ def act_with_policy(
             intervention_rate = 0.0
             if episode_total_steps > 0:
                 intervention_rate = episode_intervention_steps / episode_total_steps
+
+            # These metrics otherwise only reach wandb, so with wandb disabled the two numbers
+            # that actually show whether HIL-SERL is converging -- episodic reward and how much
+            # of the episode the human drove -- are computed and then discarded. Log them.
+            logging.info(
+                f"[ACTOR] Episode summary | reward {sum_reward_episode:.1f} | "
+                f"intervention {intervention_rate * 100:5.1f}% "
+                f"({episode_intervention_steps}/{episode_total_steps} steps) | "
+                f"interaction step {interaction_step}"
+            )
 
             # Send episodic reward to the learner
             interactions_queue.put(
