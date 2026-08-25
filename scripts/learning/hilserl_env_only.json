@@ -1,0 +1,103 @@
+{
+  "env": {
+    "name": "real_robot",
+    "fps": 10,
+    "task": "Grab the tube",
+    "robot": {
+      "type": "so101_follower",
+      "port": "/dev/lerobot_follower",
+      "id": "my_awesome_follower_arm",
+      "cameras": {
+        "wrist": {
+          "type": "opencv",
+          "index_or_path": "/dev/lerobot_wrist_cam",
+          "width": 480,
+          "height": 640,
+          "fps": 30,
+          "rotation": 90
+        },
+        "side": {
+          "type": "opencv",
+          "index_or_path": "/dev/lerobot_side_cam",
+          "width": 640,
+          "height": 480,
+          "fps": 30
+        }
+      }
+    },
+    "teleop": {
+      "type": "keyboard_ee"
+    },
+    "processor": {
+      "observation": {
+        "add_ee_pose_to_observation": false,
+        "add_joint_velocity_to_observation": false,
+        "add_current_to_observation": false,
+        "display_cameras": false
+      },
+      "image_preprocessing": {
+        "crop_params_dict": {
+          "observation.images.side": [
+            0,
+            0,
+            440,
+            300
+          ]
+        },
+        "resize_size": [
+          128,
+          128
+        ]
+      },
+      "inverse_kinematics": {
+        "urdf_path": "/home/atomic/robot_assets/so101/so101_new_calib.urdf",
+        "target_frame_name": "gripper_frame_link",
+        "end_effector_bounds": {
+          "min": [
+            0.02,
+            -0.23,
+            -0.03
+          ],
+          "max": [
+            0.2,
+            -0.03,
+            0.08
+          ]
+        },
+        "end_effector_step_sizes": {
+          "x": 0.02,
+          "y": 0.02,
+          "z": 0.02
+        }
+      },
+      "max_gripper_pos": 40.0,
+      "gripper": {
+        "use_gripper": true,
+        "gripper_penalty": -0.02
+      },
+      "reset": {
+        "fixed_reset_joint_positions": [
+          57.0,
+          -12.4,
+          15.9,
+          84.2,
+          -1.8,
+          30.0
+        ],
+        "reset_time_s": 15.0,
+        "control_time_s": 20.0,
+        "terminate_on_success": true
+      },
+      "reward_classifier": {
+        "pretrained_path": "outputs/train/reward_classifier_v2/checkpoints/005720/pretrained_model",
+        "success_threshold": 0.7,
+        "success_reward": 1.0
+      }
+    }
+  },
+  "dataset": {
+    "repo_id": "Atomictan/grab_tube_offline_10hz_v3",
+    "task": "Grab the tube"
+  },
+  "device": "cuda"
+}
