@@ -112,7 +112,11 @@ and evaluation) was tested by restoring the original scene and re-running the pr
 moved success 35% -> 40%, within noise, and was rejected before any training time was
 spent on it. The position-coverage hypothesis survived, and drove the remaining cycles.
 
-A fuller writeup will be published separately.
+Full writeup, including the failure taxonomy and what each correction round targeted:
+[`GRASP_IMPROVEMENT_SUMMARY.md`](https://github.com/atomictan/lerobot-so101/blob/main/scripts/learning/GRASP_IMPROVEMENT_SUMMARY.md).
+The wider project log -- imitation learning, simulation, and reinforcement learning on the
+same arm -- is in
+[`PROJECT_LOG.md`](https://github.com/atomictan/lerobot-so101/blob/main/scripts/learning/PROJECT_LOG.md).
 """
 
 STRUCTURE = """\
@@ -160,6 +164,11 @@ def main() -> None:
         action="store_true",
         help="upload public instead of private (irreversible in practice)",
     )
+    parser.add_argument(
+        "--card-only",
+        action="store_true",
+        help="re-render and push only README.md, leaving the uploaded data untouched",
+    )
     parser.add_argument("--repo-id", default=REPO_ID)
     args = parser.parse_args()
 
@@ -176,6 +185,26 @@ def main() -> None:
         print("Dry run -- nothing uploaded.")
         return
 
+    if args.card_only:
+        # Re-render and push just README.md. The data is already on the Hub and unchanged,
+        # so there is no reason to re-walk 2.5 GB to fix a paragraph.
+        from lerobot.datasets.utils import create_lerobot_dataset_card
+
+        ds = LeRobotDataset(args.repo_id)
+        card = create_lerobot_dataset_card(
+            tags=TAGS,
+            dataset_info=ds.meta.info,
+            license="apache-2.0",
+            repo_id=args.repo_id,
+            dataset_description=DESCRIPTION,
+            dataset_structure=STRUCTURE,
+            citation_bibtex=CITATION,
+            url="https://github.com/atomictan/lerobot-so101",
+        )
+        card.push_to_hub(repo_id=args.repo_id, repo_type="dataset")
+        print(f"Card updated: https://huggingface.co/datasets/{args.repo_id}")
+        return
+
     ds = LeRobotDataset(args.repo_id)
     visibility = "PUBLIC" if args.public else "private"
     print(f"Uploading {ds.meta.total_episodes} episodes / {ds.meta.total_frames:,} frames...")
@@ -189,9 +218,7 @@ def main() -> None:
         dataset_description=DESCRIPTION,
         dataset_structure=STRUCTURE,
         citation_bibtex=CITATION,
-        # No `url=` while the source repo is private -- it renders as "Homepage:" in the
-        # card and would 404 for readers. Add it here once the repo is public and re-run;
-        # push_to_hub regenerates the card, so updating it later is a one-command change.
+        url="https://github.com/atomictan/lerobot-so101",
     )
     print(f"Done: https://huggingface.co/datasets/{args.repo_id}")
 
