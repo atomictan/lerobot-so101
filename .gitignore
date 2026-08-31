@@ -176,3 +176,7 @@ outputs/
 *.urdf
 *.xml
 *.part
+
+# Recorded video and local experiment logs (safety net — these should never be committed)
+*.mp4
+wandb/
