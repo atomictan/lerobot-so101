@@ -3,6 +3,13 @@
 Teaching a 5-DOF desk robot arm to pick up a tube — first by imitation, then by
 reinforcement learning — on physical hardware, end to end.
 
+<p align="center">
+  <img src="./media/so101/grab_tube.webp" alt="SO-101 arm picking up a tube and dropping it into a bin" width="560">
+  <br>
+  <em>One teleoperated demonstration from the training dataset (side camera).<br>
+  An ACT policy trained on these 118 episodes reaches 96.7% success over 30 trials.</em>
+</p>
+
 This is a working fork of [🤗 LeRobot](https://github.com/huggingface/lerobot) containing a
 single hobbyist's research project: the tooling built along the way, sixteen fixes to the
 upstream RL stack, and a written record of what worked and what didn't.
